@@ -1,7 +1,7 @@
-# CB6 Plan — `hass-oidc-auth` Private Fork (stability-first)
+# Upstream-First Plan — `hass-oidc-auth` (CB6 as validation environment)
 
 ## Goal
-Run a **stable, security-maintained fork** for CB6 on top of `v0.6.5-alpha`, validate on CB6 end-to-end, then submit a focused upstream PR only after successful field testing.
+Develop changes in a way that can be **merged back upstream** (not CB6-only), using CB6 as the primary real-world validation environment before opening focused upstream PRs.
 
 ## Repository Setup
 - Upstream: `christiaangoossens/hass-oidc-auth` (`origin`)
