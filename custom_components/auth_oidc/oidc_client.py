@@ -6,6 +6,7 @@ import os
 import base64
 import hashlib
 import ssl
+import time
 from typing import Optional
 from functools import partial
 import aiohttp
@@ -72,8 +73,8 @@ class HTTPClientError(aiohttp.ClientResponseError):
 class OIDCClient:
     """OIDC Client implementation for Python, including PKCE."""
 
-    # Flows stores the state, code_verifier and nonce of all current flows.
-    flows = {}
+    # Lifetime for temporary login flow state (in seconds).
+    FLOW_TTL_SECONDS = 300
 
     # HTTP session to be used
     http_session: aiohttp.ClientSession = None
@@ -113,6 +114,8 @@ class OIDCClient:
         self.admin_role = roles.get(ROLE_ADMINS, "admins")
         self.tls_verify = network.get(NETWORK_TLS_VERIFY, True)
         self.tls_ca_path = network.get(NETWORK_TLS_CA_PATH)
+        # Flows store state, code_verifier and nonce for active login attempts.
+        self.flows: dict[str, dict[str, str | float]] = {}
 
     def __del__(self):
         """Cleanup the HTTP session."""
@@ -172,6 +175,15 @@ class OIDCClient:
             connector=aiohttp.TCPConnector(**tcp_connector_args)
         )
         return self.http_session
+
+    def _cleanup_expired_flows(self) -> None:
+        """Remove stale state entries from unfinished login flows."""
+        oldest_valid = time.monotonic() - self.FLOW_TTL_SECONDS
+        self.flows = {
+            state: flow
+            for state, flow in self.flows.items()
+            if flow.get("created_at", oldest_valid) >= oldest_valid
+        }
 
     async def _fetch_discovery_document(self):
         """Fetches discovery document from the given URL."""
@@ -351,6 +363,8 @@ class OIDCClient:
     async def async_get_authorization_url(self, redirect_uri: str) -> Optional[str]:
         """Generates the authorization URL for the OIDC flow."""
         try:
+            self._cleanup_expired_flows()
+
             if self.discovery_document is None:
                 self.discovery_document = await self._fetch_discovery_document()
 
@@ -367,7 +381,11 @@ class OIDCClient:
             )
 
             # Save all of them for later verification
-            self.flows[state] = {"code_verifier": code_verifier, "nonce": nonce}
+            self.flows[state] = {
+                "code_verifier": code_verifier,
+                "nonce": nonce,
+                "created_at": time.monotonic(),
+            }
 
             # Construct the params
             query_params = {
@@ -451,10 +469,10 @@ class OIDCClient:
         """Completes the OIDC token flow to obtain a user's details."""
 
         try:
-            if state not in self.flows:
+            self._cleanup_expired_flows()
+            flow = self.flows.pop(state, None)
+            if flow is None:
                 raise OIDCStateInvalid
-
-            flow = self.flows[state]
 
             if self.discovery_document is None:
                 self.discovery_document = await self._fetch_discovery_document()
