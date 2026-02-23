@@ -326,7 +326,7 @@ class OpenIdLoginFlow(LoginFlow):
         code_cookie = req.cookies.get("auth_oidc_code")
 
         if code_cookie:
-            _LOGGER.debug("Code cookie found on login: %s", code_cookie)
+            _LOGGER.debug("OIDC login cookie found on login flow")
             try:
                 return await self._finalize_user(code_cookie)
             except InvalidAuthError:
