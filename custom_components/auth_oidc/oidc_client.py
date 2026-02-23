@@ -47,6 +47,10 @@ class OIDCStateInvalid(OIDCClientException):
     "Raised when the state for your request cannot be matched against a stored state."
 
 
+class OIDCFlowInvalid(OIDCClientException):
+    "Raised when the state/token flow payload is missing required values."
+
+
 class OIDCUserinfoInvalid(OIDCClientException):
     "Raised when the user info is invalid or cannot be obtained."
 
@@ -149,8 +153,10 @@ class OIDCClient:
 
     async def _get_http_session(self) -> aiohttp.ClientSession:
         """Create or get the existing client session with custom networking/TLS options"""
-        if self.http_session is not None:
+        if self.http_session is not None and not self.http_session.closed:
             return self.http_session
+        if self.http_session is not None and self.http_session.closed:
+            self.http_session = None
 
         _LOGGER.debug(
             "Creating HTTP session provider with options: "
@@ -451,15 +457,18 @@ class OIDCClient:
         """Completes the OIDC token flow to obtain a user's details."""
 
         try:
-            if state not in self.flows:
+            flow = self.flows.pop(state, None)
+            if flow is None:
                 raise OIDCStateInvalid
-
-            flow = self.flows[state]
 
             if self.discovery_document is None:
                 self.discovery_document = await self._fetch_discovery_document()
 
             token_endpoint = self.discovery_document["token_endpoint"]
+            nonce = flow.get("nonce")
+            if not isinstance(nonce, str):
+                _LOGGER.warning("Flow state is missing a valid nonce.")
+                raise OIDCFlowInvalid
 
             # Construct the params
             query_params = {
@@ -475,32 +484,51 @@ class OIDCClient:
 
             # If we disable PKCE, don't send the code verifier
             if not self.disable_pkce:
-                query_params["code_verifier"] = flow["code_verifier"]
+                code_verifier = flow.get("code_verifier")
+                if not isinstance(code_verifier, str):
+                    _LOGGER.warning("Flow state is missing a valid code verifier.")
+                    raise OIDCFlowInvalid
+                query_params["code_verifier"] = code_verifier
 
             # Exchange the code for a token
             token_response = await self._make_token_request(
                 token_endpoint, query_params
             )
+            if not isinstance(token_response, dict):
+                _LOGGER.warning("Token endpoint returned an invalid response object.")
+                raise OIDCTokenResponseInvalid
 
             id_token = token_response.get("id_token")
+            if not isinstance(id_token, str):
+                _LOGGER.warning("Token endpoint response does not include an id_token.")
+                raise OIDCTokenResponseInvalid
 
             # Parse the id token to obtain the relevant details
             id_token = await self._parse_id_token(id_token)
 
             if id_token is None:
                 _LOGGER.warning("ID token could not be parsed!")
-                return None
+                raise OIDCTokenResponseInvalid
 
             # OpenID Connect Core 1.0 Section 3.1.3.7.11
             # If a nonce value was sent in the Authentication Request,
             # a nonce Claim MUST be present and its value checked to verify
             # that it is the same value as the one that was sent in the Authentication Request.
-            if id_token.get("nonce") != flow["nonce"]:
+            if id_token.get("nonce") != nonce:
                 _LOGGER.warning("Nonce mismatch!")
-                return None
+                raise OIDCFlowInvalid
 
             access_token = token_response.get("access_token")
-            data = await self.parse_user_details(id_token, access_token)
+            if "userinfo_endpoint" in self.discovery_document and not isinstance(
+                access_token, str
+            ):
+                _LOGGER.warning(
+                    "Token endpoint response does not include an access_token."
+                )
+                raise OIDCTokenResponseInvalid
+            data = await self.parse_user_details(
+                id_token, access_token if isinstance(access_token, str) else ""
+            )
 
             # Log which details were obtained for debugging
             # Also log the original subject identifier such that you can look it up in your provider
