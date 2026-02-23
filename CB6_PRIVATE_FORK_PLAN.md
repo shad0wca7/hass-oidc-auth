@@ -3,6 +3,11 @@
 ## Goal
 Develop changes in a way that can be **merged back upstream** (not CB6-only), using CB6 as the primary real-world validation environment before opening focused upstream PRs.
 
+## Latest patch note (2026-02-23)
+- Security hardening: switched one-time OIDC login cookie handling to `aiohttp`'s `set_cookie()` API, kept strict cookie flags, enabled conditional `Secure` on HTTPS requests, and disabled caching on the finish page that renders one-time codes.
+- Logging hardening: removed debug logging of raw one-time login code values.
+- Dependency audit note: network-restricted environment blocked registry-backed audit commands (`npm audit`, `npm outdated`) and local `uv` was not installed, so dependency verification was limited to manifest/lockfile review in this run.
+
 ## Repository Setup
 - Upstream: `christiaangoossens/hass-oidc-auth` (`origin`)
 - Fork: `shad0wca7/hass-oidc-auth` (`fork`)

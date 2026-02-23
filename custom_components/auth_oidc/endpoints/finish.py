@@ -27,7 +27,15 @@ class OIDCFinishView(HomeAssistantView):
             return web.Response(text=view_html, content_type="text/html")
 
         view_html = await get_view("finish", {"code": code})
-        return web.Response(text=view_html, content_type="text/html")
+        return web.Response(
+            text=view_html,
+            content_type="text/html",
+            headers={
+                # Prevent one-time login codes from ending up in browser/proxy caches.
+                "Cache-Control": "no-store, max-age=0",
+                "Pragma": "no-cache",
+            },
+        )
 
     async def post(self, request: web.Request) -> web.Response:
         """Receive response."""
@@ -37,18 +45,17 @@ class OIDCFinishView(HomeAssistantView):
         code = data.get("code")
 
         if not code:
-            return web.Response(text="No code received", status=500)
+            return web.Response(text="No code received", status=400)
 
-        # Return redirect to the main page for sign in with a cookie
-        return web.HTTPFound(
-            location="/?storeToken=true",
-            headers={
-                # Set a cookie to enable autologin on only the specific path used
-                # for the POST request, with all strict parameters set
-                # This cookie should not be read by any Javascript or any other paths.
-                # It can be really short lifetime as we redirect immediately (5 seconds)
-                "set-cookie": "auth_oidc_code="
-                + code
-                + "; Path=/auth/login_flow; SameSite=Strict; HttpOnly; Max-Age=5",
-            },
+        # Return redirect to the main page for sign in with a cookie.
+        response = web.HTTPFound(location="/?storeToken=true")
+        response.set_cookie(
+            "auth_oidc_code",
+            code,
+            path="/auth/login_flow",
+            max_age=5,
+            httponly=True,
+            samesite="Strict",
+            secure=request.secure,
         )
+        return response
